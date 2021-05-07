@@ -1,7 +1,0 @@
-node {
-    checkout scm
-
-    docker.image('stegerpa/seafile7').withRun('-p 50000:50000') { c ->
-        sh 'sleep 60'
-    }
-}
