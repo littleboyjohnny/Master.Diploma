@@ -1,0 +1,41 @@
+
+version: '3'
+services:
+  iast:
+    build: iast_image/.
+    environment:
+      - CONTRAST__API__API_KEY
+      - CONTRAST__API__SERVICE_KEY
+      - CONTRAST__API__USER_NAME
+      - CONTRAST__API__URL
+    ports:
+      - "8080:8080"
+
+  sast:
+    container_name: sast_app
+    build: sast_image/.
+    volumes:
+      - ./results:/tmp/results
+      - /home/alex/study/WebGoat:/tmp/src
+
+  dast:
+    container_name: dast_app
+    build: dast_image/.
+    volumes:
+      - ./results:/zap/wrk/:rw
+    tty: true
+    depends_on:
+      - iast
+
+  dependency_check:
+    build: dependency_check_image/.
+    container_name: dependency_check_app
+    environment:
+      - user
+      - UID
+      - GID
+    volumes:
+      - ./dependency_check_image:/usr/share/dependency-check/data:z
+      - ./results:/report:z
+      - /home/alex/study/WebGoat:/src:z
+
