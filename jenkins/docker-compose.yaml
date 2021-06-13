@@ -1,0 +1,24 @@
+version: "3"
+
+services:
+  jenkins:
+    container_name: jenkins-dev
+    image: rmuhamedgaliev/jenkins:lts
+    restart: always
+    volumes:
+      - jenkins_home:/var/jenkins_home
+      - /var/run/docker.sock:/var/run/docker.sock
+      - results:/tmp/results
+      - cache:/tmp/cache
+    ports:
+      - "8081:8080"
+    networks:
+      jenkins_network: {}
+
+volumes:
+  jenkins_home:
+  cache:
+  results:
+
+networks:
+  jenkins_network:
