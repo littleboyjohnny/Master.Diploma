@@ -15,6 +15,10 @@ node {
         env.ENABLE_DAST = "true"
     }
 
+    properties([
+        pipelineTriggers([[$class:"SCMTrigger", scmpoll_spec:"H/5 * * * *"]])
+    ])
+
     git url: "${env.GITURL}", poll: true
     
     stage("Build") {
