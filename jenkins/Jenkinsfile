@@ -1,55 +1,93 @@
 node {
     cleanWs()
     
+    script {
+        env.GITURL = "https://github.com/littleboyjohnny/Benchmark.git"
+        env.EXEC_CMD = "git pull && ./runRemoteAccessibleBenchmark.sh"
+        env.APP_PORT = 8443
+        env.APP_IMAGE_NAME = "benchmark"
+        env.APP_URL_PATH = "benchmark/"
+        
+        env.ENABLE_SAST = "true"
+        env.ENABLE_DEP_CHECK = "true"
+        env.ENABLE_IMAGE_CHECK = "true"
+        env.ENABLE_SECRETS_CHECK = "true"
+        env.ENABLE_DAST = "true"
+    }
+
+    git url: "${env.GITURL}", poll: true
+    
     stage("Build") {
-        docker.image('benchmark').withRun('-t -i -p 8443:8443 --net jenkins_jenkins_network') { c ->
-            sh "docker exec -d ${c.id} sh -c 'git pull && ./runRemoteAccessibleBenchmark.sh'"
+        docker.image("${env.APP_IMAGE_NAME}").withRun("-t -i -p ${env.APP_PORT}:${env.APP_PORT} --net jenkins_jenkins_network") { c ->
+            script {
+                if (env.EXEC_CMD != "") {
+                    sh "docker exec -d ${c.id} sh -c '${env.EXEC_CMD}'"
+                }
+            }
             
             script {
                 env.APPIP = sh( script: "docker inspect ${c.id} | egrep \"\\\"IPAddress\\\": \\\"[0-9]{1,3}.[0-9]{1,3}.[0-9]{1,3}.[0-9]{1,3}\\\"\" -o | egrep -o \"[0-9]{1,3}.[0-9]{1,3}.[0-9]{1,3}.[0-9]{1,3}\"",
                 returnStdout: true).trim()
-                env.SOURCE_DIR_NAME = "jenkins_dir_for_source"
-                
-                env.SOURCE_DIR = "/var/jenkins_home/${env.SOURCE_DIR_NAME}"
+                env.WORKDIR = "workspace/${JOB_BASE_NAME}"
+                env.SOURCE_DIR = "/var/jenkins_home/${env.WORKDIR}"
             }
             
-            sh "if [ ! -d \"${env.SOURCE_DIR}\" ]; then mkdir ${env.SOURCE_DIR} && git clone https://github.com/OWASP/Benchmark.git ${env.SOURCE_DIR}; else git -C \"${env.SOURCE_DIR}\" pull; fi"
-            
-            stage("SAST") {
-                docker.image('sast_image').withRun('-t -i -v jenkins_results:/tmp/results -v jenkins_jenkins_home:/tmp/source') { s ->
-                    sh "docker exec ${s.id} /bin/bash -c \"semgrep --config=p/java --sarif -o /tmp/results/semgrep_result.sarif /tmp/source/${env.SOURCE_DIR_NAME}\""
-                }
-            }
-            
-            stage("Dependency check") {
-                docker.image("dependency_check_image").withRun("-i -t -u root -v jenkins_cache:/usr/share/dependency-check/data -v jenkins_results:/report -v jenkins_jenkins_home:/src") { dc ->
-                    sh "docker exec -u root -i ${dc.id} sh -c '/usr/share/dependency-check/bin/dependency-check.sh --scan /src/${env.SOURCE_DIR_NAME} --out /report'"
-                }
-            }
-            
-            stage("Docker image check") {
-                docker.image("docker_check_image").withRun("-i -t -v /var/run/docker.sock:/var/run/docker.sock -v jenkins_results:/tmp/results -v jenkins_cache:/root/.cache/") { ic ->
-                    sh "docker exec -i ${ic.id} sh -c 'trivy benchmark > /tmp/results/trivy_results.txt'"
-                }
-            }
-            
-            try {
-                stage("Check secrets") {
-                    docker.image('check_secrets_image').withRun('-t -i -v jenkins_jenkins_home:/proj -v jenkins_results:/tmp/results') { cs ->
-                        sh "docker exec -i -u root ${cs.id} sh -c \"trufflehog --json file:///proj/${env.SOURCE_DIR_NAME} --max_depth 20 > /tmp/results/trufflehog_result.json\""
+            script {
+                if (env.ENABLE_SAST == "true") {
+                    sh "echo 'SAST ENABLED'"
+                    stage("SAST") {
+                        docker.image("sast_image").withRun("-t -i -v jenkins_results:/tmp/results -v jenkins_jenkins_home:/tmp/source") { s ->
+                            sh "docker exec ${s.id} /bin/bash -c \"semgrep --config=p/java --sarif -o /tmp/results/semgrep_result.sarif /tmp/source/${env.WORKDIR}\""
+                        }
                     }
                 }
-            } catch (all) {
             }
             
-            try {
-                stage ("DAST") {
-                    docker.image('owasp/zap2docker-stable').withRun('-t --net jenkins_jenkins_network -v jenkins_results:/zap/wrk') { d ->
-                        sh "docker exec -i ${d.id} sh -c 'while [ -z \$(curl -v -k --silent https://${env.APPIP}:8443/benchmark/ 2>&1 | grep -o \"< HTTP/.* [^5][0-9][0-9]\") ]; do sleep 10; done'"
-                        sh "docker exec -i ${d.id} zap-baseline.py -t https://${env.APPIP}:8443/benchmark/ -r zap_result.html"
+            script {
+                if (env.ENABLE_DEP_CHECK == "true") {
+                    stage("Dependency check") {
+                        docker.image("dependency_check_image").withRun("-i -t -u root -v jenkins_cache:/usr/share/dependency-check/data -v jenkins_results:/report -v jenkins_jenkins_home:/src") { dc ->
+                            sh "docker exec -u root -i ${dc.id} sh -c '/usr/share/dependency-check/bin/dependency-check.sh --scan /src/${env.WORKDIR} --out /report'"
+                        }
                     }
                 }
-            } catch (all) {
+            }
+            
+            script {
+                if (env.ENABLE_IMAGE_CHECK == "true") {
+                    stage("Docker image check") {
+                        docker.image("docker_check_image").withRun("-i -t -v /var/run/docker.sock:/var/run/docker.sock -v jenkins_results:/tmp/results -v jenkins_cache:/root/.cache/") { ic ->
+                            sh "docker exec -i ${ic.id} sh -c 'trivy ${env.APP_IMAGE_NAME} > /tmp/results/trivy_results.txt'"
+                        }
+                    }
+                }
+            }
+            
+            script {
+                if (env.ENABLE_SECRETS_CHECK == "true") {
+                    try {
+                        stage("Check secrets") {
+                            docker.image("check_secrets_image").withRun("-t -i -v jenkins_jenkins_home:/proj -v jenkins_results:/tmp/results") { cs ->
+                                sh "docker exec -i -u root ${cs.id} sh -c \"trufflehog --json file:///proj/${env.WORKDIR} --max_depth 20 > /tmp/results/trufflehog_result.json\""
+                            }
+                        }
+                    } catch (all) {
+                    }
+                }
+            }
+            
+            script {
+                if (env.ENABLE_DAST == "true") {
+                    try {
+                        stage ("DAST") {
+                            docker.image('owasp/zap2docker-stable').withRun('-t --net jenkins_jenkins_network -v jenkins_results:/zap/wrk') { d ->
+                                sh "docker exec -i ${d.id} sh -c 'while [ -z \$(curl -v -k --silent https://${env.APPIP}:${env.APP_PORT}/${env.APP_URL_PATH} 2>&1 | grep -o \"< HTTP/.* [^5][0-9][0-9]\") ]; do sleep 10; done'"
+                                sh "docker exec -i ${d.id} zap-baseline.py -t https://${env.APPIP}:${env.APP_PORT}/${env.APP_URL_PATH} -r zap_result.html"
+                            }
+                        }
+                    } catch (all) {
+                    }
+                }
             }
         }
     }
